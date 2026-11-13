@@ -1,0 +1,61 @@
+name: Build EvoX bootanimation
+
+on:
+  push:
+    branches: [gemini-bootanimation]
+    paths:
+      - 'cmds/bootanimation/**'
+      - '.github/workflows/build-bootanimation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evox-husky-bootanimation
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/gemini-bootanimation'
+    runs-on: [self-hosted, linux, x64, evox-husky-build]
+    timeout-minutes: 120
+    env:
+      EVOX_BUILD_ROOT: ${{ vars.EVOX_BUILD_ROOT }}
+      EVOX_LUNCH_TARGET: ${{ vars.EVOX_LUNCH_TARGET }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build only bootanimation
+        shell: bash
+        run: |
+          set -eo pipefail
+          : "${EVOX_BUILD_ROOT:?Set the absolute path of the synced EvoX 11.11 husky tree}"
+          : "${EVOX_LUNCH_TARGET:?Set the lunch target for the synced husky tree}"
+          cd "$EVOX_BUILD_ROOT"
+          test -f build/envsetup.sh
+          player="$PWD/frameworks/base/cmds/bootanimation"
+          test -z "$(git -C frameworks/base status --porcelain -- cmds/bootanimation)"
+          backup="$(mktemp -d)"
+          cp -p "$player/BootAnimation.cpp" "$player/BootAnimation.h" "$backup/"
+          restore() {
+            cp -p "$backup/BootAnimation.cpp" "$backup/BootAnimation.h" "$player/"
+            rm -rf -- "$backup"
+          }
+          trap restore EXIT
+          cp "$GITHUB_WORKSPACE/cmds/bootanimation/BootAnimation.cpp" "$player/"
+          cp "$GITHUB_WORKSPACE/cmds/bootanimation/BootAnimation.h" "$player/"
+          source build/envsetup.sh
+          lunch "$EVOX_LUNCH_TARGET"
+          test "$(get_build_var TARGET_DEVICE)" = husky
+          m bootanimation
+          binary="$(get_abs_build_var PRODUCT_OUT)/system/bin/bootanimation"
+          test -s "$binary"
+          mkdir -p "$RUNNER_TEMP/evox-bootanimation-artifact"
+          cp "$binary" "$RUNNER_TEMP/evox-bootanimation-artifact/bootanimation"
+          cd "$RUNNER_TEMP/evox-bootanimation-artifact"
+          sha256sum bootanimation > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evox-husky-bootanimation
+          path: ${{ runner.temp }}/evox-bootanimation-artifact/
+          if-no-files-found: error

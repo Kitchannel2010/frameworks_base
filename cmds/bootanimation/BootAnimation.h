@@ -109,6 +109,8 @@ public:
         Vector<Part> parts;
         String8 audioConf;
         String8 fileName;
+        String8 fragmentShader;
+        float shaderColors[4][3] = {};
         ZipFileRO* zip;
         Font clockFont;
         Font progressFont;
@@ -191,7 +193,7 @@ private:
     status_t initTexture(Texture* texture, AssetManager& asset, const char* name,
         bool premultiplyAlpha = true);
     status_t initTexture(FileMap* map, int* width, int* height,
-        bool premultiplyAlpha = true);
+        bool premultiplyAlpha = true, bool releaseMap = true);
     status_t initFont(Font* font, const char* fallback);
     void initShaders();
     bool android(const Display& display);

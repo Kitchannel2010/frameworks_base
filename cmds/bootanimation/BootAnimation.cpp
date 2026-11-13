@@ -364,7 +364,7 @@ status_t BootAnimation::initTexture(Texture* texture, AssetManager& assets,
 }
 
 status_t BootAnimation::initTexture(FileMap* map, int* width, int* height,
-    bool premultiplyAlpha) {
+    bool premultiplyAlpha, bool releaseMap) {
     ATRACE_CALL();
     AndroidBitmapInfo bitmapInfo;
     void* pixels = decodeImage(map->getDataPtr(), map->getDataLength(), &bitmapInfo,
@@ -374,7 +374,7 @@ status_t BootAnimation::initTexture(FileMap* map, int* width, int* height,
     // FileMap memory is never released until application exit.
     // Release it now as the texture is already loaded and the memory used for
     // the packed resource can be released.
-    delete map;
+    if (releaseMap) delete map;
 
     if (!pixels) {
         return NO_INIT;
@@ -790,24 +790,32 @@ GLuint compileShader(GLenum shaderType, const GLchar *source) {
         GLint maxLength = 0;
         glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &maxLength);
         std::vector<GLchar> errorLog(maxLength);
-        glGetShaderInfoLog(shader, maxLength, &maxLength, &errorLog[0]);
-        SLOGE("Shader compilation error: %s", &errorLog[0]);
+        glGetShaderInfoLog(shader, maxLength, &maxLength, errorLog.data());
+        SLOGE("Shader compilation error: %s", errorLog.empty() ? "" : errorLog.data());
+        glDeleteShader(shader);
         return 0;
     }
     return shader;
 }
 
-GLuint linkShader(GLuint vertexShader, GLuint fragmentShader) {
+GLuint linkShader(GLuint vertexShader, GLuint fragmentShader,
+                  GLuint referenceProgram = 0) {
     ATRACE_CALL();
     GLuint program = glCreateProgram();
     glAttachShader(program, vertexShader);
     glAttachShader(program, fragmentShader);
+    if (referenceProgram) {
+        glBindAttribLocation(program, glGetAttribLocation(referenceProgram, A_POSITION),
+                             A_POSITION);
+        glBindAttribLocation(program, glGetAttribLocation(referenceProgram, A_UV), A_UV);
+    }
     glLinkProgram(program);
     GLint isLinked = 0;
     glGetProgramiv(program, GL_LINK_STATUS, (int *)&isLinked);
     if (isLinked == GL_FALSE) {
         SLOGE("Linking shader failed. Shader handles: vert %d, frag %d",
             vertexShader, fragmentShader);
+        glDeleteProgram(program);
         return 0;
     }
     return program;
@@ -1188,7 +1196,8 @@ bool BootAnimation::parseAnimationDesc(Animation& animation)  {
     if (!readFile(animation.zip, "desc.txt", desString)) {
         return false;
     }
-    char const* s = desString.c_str();
+    // Use the archive's BLK palette for the Pixel atlas shader.
+    const char* s = desString.c_str();
     std::string dynamicColoringPartName = "";
     bool postDynamicColoring = false;
 
@@ -1219,6 +1228,7 @@ bool BootAnimation::parseAnimationDesc(Animation& animation)  {
         char start_color_2[7] = "000000";
         char start_color_3[7] = "000000";
 
+        char palette[4][7] = {};
         int nextReadPos;
 
         if (strlen(l) == 0) {
@@ -1236,6 +1246,11 @@ bool BootAnimation::parseAnimationDesc(Animation& animation)  {
               animation.progressEnabled = (progress != 0);
             } else {
               animation.progressEnabled = false;
+            }
+        } else if (sscanf(l, "device_colors BLK #%6s #%6s #%6s #%6s",
+                          palette[0], palette[1], palette[2], palette[3]) == 4) {
+            for (int i = 0; i < DYNAMIC_COLOR_COUNT; ++i) {
+                parseColor(palette[i], animation.shaderColors[i]);
             }
         } else if (sscanf(l, "dynamic_colors %" STRTO(ANIM_PATH_MAX) "s #%6s #%6s #%6s #%6s %d %d",
             dynamicColoringPartNameBuffer,
@@ -1327,6 +1342,19 @@ bool BootAnimation::preloadZip(Animation& animation) {
         const std::filesystem::path path(entryName.parent_path());
         const std::filesystem::path leaf(entryName.filename());
         if (!leaf.empty()) {
+            if (entryName == "shader.txt") {
+                uint16_t method;
+                if (zip->getEntryInfo(entry, &method, nullptr, nullptr, nullptr, nullptr, nullptr)
+                        && method == ZipFileRO::kCompressStored) {
+                    std::unique_ptr<FileMap> map(zip->createEntryFileMap(entry));
+                    if (map && map->getDataLength() > 0 && map->getDataLength() <= 16384) {
+                        animation.fragmentShader = String8(
+                                static_cast<const char*>(map->getDataPtr()),
+                                map->getDataLength());
+                    }
+                }
+                continue;
+            }
             if (entryName == CLOCK_FONT_ZIP_NAME) {
                 FileMap* map = zip->createEntryFileMap(entry);
                 if (map) {
@@ -1581,6 +1609,32 @@ bool BootAnimation::playAnimation(const Animation& animation) {
     const size_t numParts = animation.parts.size();
     nsecs_t frameDuration = s2ns(1) / animation.fps;
 
+    GLuint atlasProgram = 0;
+    GLuint atlasTexture = 0;
+    GLint atlasBounds = -1, atlasSize = -1, atlasSampler = -1, atlasFade = -1;
+    if (!animation.fragmentShader.empty()) {
+        const GLuint vertex = compileShader(GL_VERTEX_SHADER, VERTEX_SHADER_SOURCE);
+        const GLuint fragment = compileShader(GL_FRAGMENT_SHADER,
+                                              animation.fragmentShader.c_str());
+        if (vertex && fragment) atlasProgram = linkShader(vertex, fragment, mImageShader);
+        if (vertex) glDeleteShader(vertex);
+        if (fragment) glDeleteShader(fragment);
+        if (atlasProgram) {
+            atlasBounds = glGetUniformLocation(atlasProgram, "uImageBoundingBox");
+            atlasSize = glGetUniformLocation(atlasProgram, "uDisplaySize");
+            atlasSampler = glGetUniformLocation(atlasProgram, U_TEXTURE);
+            atlasFade = glGetUniformLocation(atlasProgram, U_FADE);
+            glUseProgram(atlasProgram);
+            for (int i = 0; i < DYNAMIC_COLOR_COUNT; ++i) {
+                const std::string name = U_END_COLOR_PREFIX + std::to_string(i);
+                glUniform3fv(glGetUniformLocation(atlasProgram, name.c_str()), 1,
+                             animation.shaderColors[i]);
+            }
+            glGenTextures(1, &atlasTexture);
+            ALOGI("Using boot animation shader.txt");
+        }
+    }
+
     SLOGD("%sAnimationShownTiming start time: %" PRId64 "ms", mShuttingDown ? "Shutdown" : "Boot",
             elapsedRealtime());
 
@@ -1609,7 +1663,7 @@ bool BootAnimation::playAnimation(const Animation& animation) {
 
             // It's possible that the sysprops were not loaded yet at this boot phase.
             // If that's the case, then we should keep trying until they are available.
-            if (animation.dynamicColoringEnabled && !mDynamicColorsApplied
+            if (!atlasProgram && animation.dynamicColoringEnabled && !mDynamicColorsApplied
                 && (part.useDynamicColoring || part.postDynamicColoring)) {
                 SLOGD("Trying to load dynamic color sysprops.");
                 initDynamicColors();
@@ -1660,7 +1714,16 @@ bool BootAnimation::playAnimation(const Animation& animation) {
                 const Animation::Frame& frame(part.frames[frameIdxInPart]);
                 nsecs_t lastFrame = systemTime();
 
-                if (frameIdx > 0) {
+                if (atlasProgram) {
+                    // Stream atlas frames through a single texture instead of caching each
+                    // 1024 x 2048 frame of a looping part in GPU memory.
+                    glBindTexture(GL_TEXTURE_2D, atlasTexture);
+                    int width, height;
+                    if (initTexture(frame.map, &width, &height, false, false) != NO_ERROR) {
+                        checkExit();
+                        continue;
+                    }
+                } else if (frameIdx > 0) {
                     glBindTexture(GL_TEXTURE_2D, frame.tid);
                 } else {
                     if (part.count != 1) {
@@ -1706,15 +1769,28 @@ bool BootAnimation::playAnimation(const Animation& animation) {
                     // which is equivalent to height - (yc + frame.trimHeight)
                     const int frameDrawY = display.height - (yc + trimHeight);
 
-                    glUseProgram(mImageShader);
-                    glUniform1i(mImageTextureLocation, 0);
-                    glUniform1f(mImageFadeLocation, fade);
-                    if (animation.dynamicColoringEnabled) {
-                        glUniform1f(mImageColorProgressLocation, colorProgress);
+                    if (atlasProgram) {
+                        glUseProgram(atlasProgram);
+                        glUniform1i(atlasSampler, 0);
+                        glUniform1f(atlasFade, fade);
+                        glUniform4f(atlasBounds, frame.trimX, frame.trimY,
+                                    frame.trimWidth, frame.trimHeight);
+                        glUniform2f(atlasSize, animation.width, animation.height);
+                        drawTexturedQuad(animationX,
+                                         display.height - animationY - animation.height * ratioH,
+                                         animation.width * ratioW, animation.height * ratioH,
+                                         display);
+                    } else {
+                        glUseProgram(mImageShader);
+                        glUniform1i(mImageTextureLocation, 0);
+                        glUniform1f(mImageFadeLocation, fade);
+                        if (animation.dynamicColoringEnabled) {
+                            glUniform1f(mImageColorProgressLocation, colorProgress);
+                        }
+                        glEnable(GL_BLEND);
+                        drawTexturedQuad(xc, frameDrawY, trimWidth, trimHeight, display);
+                        glDisable(GL_BLEND);
                     }
-                    glEnable(GL_BLEND);
-                    drawTexturedQuad(xc, frameDrawY, trimWidth, trimHeight, display);
-                    glDisable(GL_BLEND);
 
                     if (mClockEnabled && mTimeIsAccurate && validClock(part)) {
                         drawClock(animation.clockFont, part.clockPosX, part.clockPosY, display);
@@ -1785,11 +1861,18 @@ bool BootAnimation::playAnimation(const Animation& animation) {
 
     // Free textures created for looping parts now that the animation is done.
     for (const Animation::Part& part : animation.parts) {
-        if (part.count != 1) {
-            for (const auto& frame : part.frames) {
+        for (const auto& frame : part.frames) {
+            if (atlasProgram) {
+                delete frame.map;
+            } else if (part.count != 1) {
                 glDeleteTextures(1, &frame.tid);
             }
         }
+    }
+    if (atlasProgram) {
+        glDeleteTextures(1, &atlasTexture);
+        glUseProgram(mImageShader);
+        glDeleteProgram(atlasProgram);
     }
 
     ALOGD("%sAnimationShownTiming End time: %" PRId64 "ms", mShuttingDown ? "Shutdown" : "Boot",

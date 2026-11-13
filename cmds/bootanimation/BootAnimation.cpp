@@ -1612,6 +1612,21 @@ bool BootAnimation::playAnimation(const Animation& animation) {
     GLuint atlasProgram = 0;
     GLuint atlasTexture = 0;
     GLint atlasBounds = -1, atlasSize = -1, atlasSampler = -1, atlasFade = -1;
+    bool atlasColorsReady = false;
+    const auto updateAtlasColors = [&] {
+        glUseProgram(atlasProgram);
+        for (int i = 0; i < DYNAMIC_COLOR_COUNT; ++i) {
+            const auto value = android::base::GetProperty(
+                    "persist.bootanim.color" + std::to_string(i + 1), "");
+            float color[3];
+            // The existing parser takes a mutable fallback. Keep the ZIP palette intact.
+            float fallback[3];
+            memcpy(fallback, animation.shaderColors[i], sizeof(fallback));
+            parseColorDecimalString(value, color, fallback);
+            const std::string uniform = U_END_COLOR_PREFIX + std::to_string(i);
+            glUniform3fv(glGetUniformLocation(atlasProgram, uniform.c_str()), 1, color);
+        }
+    };
     if (!animation.fragmentShader.empty()) {
         const GLuint vertex = compileShader(GL_VERTEX_SHADER, VERTEX_SHADER_SOURCE);
         const GLuint fragment = compileShader(GL_FRAGMENT_SHADER,
@@ -1624,12 +1639,9 @@ bool BootAnimation::playAnimation(const Animation& animation) {
             atlasSize = glGetUniformLocation(atlasProgram, "uDisplaySize");
             atlasSampler = glGetUniformLocation(atlasProgram, U_TEXTURE);
             atlasFade = glGetUniformLocation(atlasProgram, U_FADE);
-            glUseProgram(atlasProgram);
-            for (int i = 0; i < DYNAMIC_COLOR_COUNT; ++i) {
-                const std::string name = U_END_COLOR_PREFIX + std::to_string(i);
-                glUniform3fv(glGetUniformLocation(atlasProgram, name.c_str()), 1,
-                             animation.shaderColors[i]);
-            }
+            atlasColorsReady = android::base::GetBoolProperty(
+                    "ro.persistent_properties.ready", false);
+            updateAtlasColors();
             glGenTextures(1, &atlasTexture);
             ALOGI("Using boot animation shader.txt");
         }
@@ -1710,6 +1722,11 @@ bool BootAnimation::playAnimation(const Animation& animation) {
                             fmax(colorTransitionEnd - colorTransitionStart, 1.0f), 0.0f), 1.0f)
                     : (part.postDynamicColoring ? 1 : 0);
                 processDisplayEvents();
+                if (atlasProgram && !atlasColorsReady &&
+                    android::base::GetBoolProperty("ro.persistent_properties.ready", false)) {
+                    atlasColorsReady = true;
+                    updateAtlasColors();
+                }
 
                 const Animation::Frame& frame(part.frames[frameIdxInPart]);
                 nsecs_t lastFrame = systemTime();

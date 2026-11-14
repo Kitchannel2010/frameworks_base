@@ -1,0 +1,40 @@
+diff --git a/husky/BoardConfig.mk b/husky/BoardConfig.mk
+index 5fcac28..43bc168 100644
+--- a/husky/BoardConfig.mk
++++ b/husky/BoardConfig.mk
+@@ -22,3 +22,7 @@ SYSTEM_EXT_PUBLIC_SEPOLICY_DIRS += \
+ include $(DEVICE_PATH)/BoardConfigCommon.mk
+ 
+ include $(VENDOR_PATH)/BoardConfigVendor.mk
++
++# Gemini build: ext4 headroom
++BOARD_SYSTEMIMAGE_PARTITION_RESERVED_SIZE := 536870912
++BOARD_PRODUCTIMAGE_PARTITION_RESERVED_SIZE := 536870912
+diff --git a/lineage_husky.mk b/lineage_husky.mk
+index 8a94756..ca2645c 100644
+--- a/lineage_husky.mk
++++ b/lineage_husky.mk
+@@ -34,3 +34,10 @@ PRODUCT_BUILD_PROP_OVERRIDES += \
+     DeviceProduct=$(DEVICE_CODENAME)
+ 
+ $(call inherit-product, $(VENDOR_PATH)/$(DEVICE_CODENAME)-vendor.mk)
++
++
++# Allow the legacy backup package artifacts required by generic_system.mk.
++PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += system/etc/permissions/privapp-permissions-appbackup.xml system/priv-app/AppDataBackup/AppDataBackup.apk
++
++# Gemini Intelligence boot animation preset
++PRODUCT_COPY_FILES += device/google/shusky/husky/gemini/bootanimation.zip:$(TARGET_COPY_OUT_PRODUCT)/media/bootanimation_gemini_intelligence.zip
+diff --git a/overlay-evolution/packages/apps/Settings/res/values/evolution_strings.xml b/overlay-evolution/packages/apps/Settings/res/values/evolution_strings.xml
+index 7663bd4..e089f40 100644
+--- a/overlay-evolution/packages/apps/Settings/res/values/evolution_strings.xml
++++ b/overlay-evolution/packages/apps/Settings/res/values/evolution_strings.xml
+@@ -7,6 +7,6 @@
+ <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+ 
+     <!-- Android version screen, build maintainer -->
+-    <string name="build_maintainer_summary" translatable="false">TechPanelGM (Giovanni)</string>
+-    <string name="build_maintainer_donate_url" translatable="false">https://buymeacoffee.com/TechPanelGM</string>
++    <string name="build_maintainer_summary" translatable="false">JeffTheKiller</string>
++    <string name="build_maintainer_donate_url" translatable="false"></string>
+ </resources>

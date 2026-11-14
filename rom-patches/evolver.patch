@@ -1,0 +1,12 @@
+diff --git a/src/org/evolution/settings/utils/BootAnimationUtils.java b/src/org/evolution/settings/utils/BootAnimationUtils.java
+index 7b4365d..1bb2f10 100644
+--- a/src/org/evolution/settings/utils/BootAnimationUtils.java
++++ b/src/org/evolution/settings/utils/BootAnimationUtils.java
+@@ -165,6 +165,7 @@ public class BootAnimationUtils {
+ 
+     /** Display name of a style; styles without an entry get their file name tidied up. */
+     public static String getLabel(Context context, String name) {
++        if ("gemini_intelligence".equals(name)) return "Gemini Intelligence";
+         String[] values = context.getResources()
+                 .getStringArray(R.array.themes_boot_animation_values);
+         String[] entries = context.getResources()

@@ -1,0 +1,91 @@
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/notification/row/NotificationBackgroundView.java b/packages/SystemUI/src/com/android/systemui/statusbar/notification/row/NotificationBackgroundView.java
+index a4c7181..5a705e9 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/notification/row/NotificationBackgroundView.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/notification/row/NotificationBackgroundView.java
+@@ -31,6 +31,8 @@ import android.graphics.drawable.LayerDrawable;
+ import android.graphics.drawable.RippleDrawable;
+ import android.util.AttributeSet;
+ import android.view.View;
++import android.view.ViewParent;
++import android.view.ViewTreeObserver;
+ 
+ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+@@ -80,6 +82,10 @@ public class NotificationBackgroundView extends View implements Dumpable,
+     private final int convexR = 9;
+     private final int concaveR = 22;
+     private BackgroundBlurDrawable mBackgroundBlurDrawable;
++    private final ViewTreeObserver.OnPreDrawListener mBlurAlphaListener = () -> {
++        updateBlurAlpha();
++        return true;
++    };
+     @VisibleForTesting
+     protected View.OnAttachStateChangeListener mOnAttachStateChangeListener;
+ 
+@@ -364,6 +370,8 @@ public class NotificationBackgroundView extends View implements Dumpable,
+                                 mBackgroundBlurDrawable.setCallback(
+                                         NotificationBackgroundView.this);
+                                 mBackgroundBlurDrawable.setColor(mNormalColor);
++                                getViewTreeObserver().addOnPreDrawListener(mBlurAlphaListener);
++                                updateBlurAlpha();
+ 
+                                 updateBackgroundRadii();
+                                 invalidate();
+@@ -386,12 +394,46 @@ public class NotificationBackgroundView extends View implements Dumpable,
+                 mOnAttachStateChangeListener = null;
+             }
+             if (mBackgroundBlurDrawable != null) {
++                getViewTreeObserver().removeOnPreDrawListener(mBlurAlphaListener);
++                mBackgroundBlurDrawable.setAlpha(0);
+                 mBackgroundBlurDrawable.setCallback(null);
+             }
+             mBackgroundBlurDrawable = null;
+         }
+     }
+ 
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        if (mBackgroundBlurDrawable != null) {
++            getViewTreeObserver().addOnPreDrawListener(mBlurAlphaListener);
++            updateBlurAlpha();
++        }
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        if (mBackgroundBlurDrawable != null) {
++            getViewTreeObserver().removeOnPreDrawListener(mBlurAlphaListener);
++            mBackgroundBlurDrawable.setAlpha(0);
++        }
++        super.onDetachedFromWindow();
++    }
++
++    private void updateBlurAlpha() {
++        if (mBackgroundBlurDrawable == null) {
++            return;
++        }
++        // The compositor draws this blur region separately from the view hierarchy.
++        float alpha = isShown() ? mDrawableAlpha * getAlpha() * getTransitionAlpha() : 0f;
++        ViewParent parent = getParent();
++        while (alpha > 0f && parent instanceof View view) {
++            alpha *= view.getAlpha() * view.getTransitionAlpha();
++            parent = view.getParent();
++        }
++        mBackgroundBlurDrawable.setAlpha(Math.round(alpha));
++    }
++
+     public Drawable getBaseBackgroundLayer() {
+         return ((LayerDrawable) mBackground).getDrawable(0);
+     }
+@@ -507,9 +549,7 @@ public class NotificationBackgroundView extends View implements Dumpable,
+             return;
+         }
+         mBackground.setAlpha(drawableAlpha);
+-        if (mBackgroundBlurDrawable != null) {
+-            mBackgroundBlurDrawable.setAlpha(drawableAlpha);
+-        }
++        updateBlurAlpha();
+     }
+ 
+     /**

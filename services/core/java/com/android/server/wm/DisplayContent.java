@@ -3855,6 +3855,7 @@ class DisplayContent extends RootDisplayArea implements WindowManagerPolicy.Disp
     @Override
     void removeImmediately() {
         mDeferredRemoval = false;
+        mWmService.mBlurController.setImeVisible(mDisplayId, false);
         try {
             if (DesktopExperienceFlags.ENABLE_DISPLAY_CONTENT_MODE_MANAGEMENT.isTrue()
                     && mWmService.mDisplayWindowSettings.shouldShowSystemDecorsLocked(this)) {

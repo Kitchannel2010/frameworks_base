@@ -28,6 +28,7 @@ import android.os.PowerManager;
 import android.os.RemoteCallbackList;
 import android.os.RemoteException;
 import android.provider.Settings;
+import android.util.SparseBooleanArray;
 import android.view.ICrossWindowBlurEnabledListener;
 import android.view.TunnelModeEnabledListener;
 
@@ -47,6 +48,9 @@ final class BlurController {
     private boolean mInPowerSaveMode;
     private boolean mBlurDisabledSetting;
     private boolean mTunnelModeEnabled = false;
+    // Cross-window blur can cause text redraw artifacts on some GPU/compositor paths while
+    // the IME is visible. Keep it disabled until all displays hide their IME.
+    private final SparseBooleanArray mDisplaysWithVisibleIme = new SparseBooleanArray();
 
     private TunnelModeEnabledListener mTunnelModeListener =
             new TunnelModeEnabledListener(Runnable::run) {
@@ -109,10 +113,25 @@ final class BlurController {
         return mBlurEnabled;
     }
 
+    void setImeVisible(int displayId, boolean visible) {
+        synchronized (mLock) {
+            if (mDisplaysWithVisibleIme.get(displayId) == visible) {
+                return;
+            }
+            if (visible) {
+                mDisplaysWithVisibleIme.put(displayId, true);
+            } else {
+                mDisplaysWithVisibleIme.delete(displayId);
+            }
+        }
+        updateBlurEnabled();
+    }
+
     private void updateBlurEnabled() {
         synchronized (mLock) {
             final boolean newEnabled = CROSS_WINDOW_BLUR_SUPPORTED && !mBlurDisabledSetting
-                    && !mInPowerSaveMode && !mTunnelModeEnabled;
+                    && !mInPowerSaveMode && !mTunnelModeEnabled
+                    && mDisplaysWithVisibleIme.size() == 0;
             if (mBlurEnabled == newEnabled) {
                 return;
             }

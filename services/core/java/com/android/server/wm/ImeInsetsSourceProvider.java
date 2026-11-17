@@ -679,7 +679,12 @@ final class ImeInsetsSourceProvider extends InsetsSourceProvider {
      * InputMethodManagerService.
      */
     public void setImeShowing(boolean imeShowing) {
+        if (mImeShowing == imeShowing) {
+            return;
+        }
         mImeShowing = imeShowing;
+        mDisplayContent.mWmService.mBlurController.setImeVisible(
+                mDisplayContent.getDisplayId(), imeShowing);
     }
 
     /**
